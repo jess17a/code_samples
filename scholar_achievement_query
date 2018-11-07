@@ -1,0 +1,53 @@
+scholar_achievement_query = '''
+WITH decayed_scores AS (
+    SELECT
+        qqs.subject_id,
+        qqs.assessment_id,
+        qqs.assessment_question_id,
+        exp(1.0)^((ln(0.5) / 28) * ('{target_date}'::date - a.due_date)) * qqs.score::float AS weight
+    FROM contrast_scores AS qqs
+    INNER JOIN assessment AS a
+        ON qqs.assessment_id = a.id
+    INNER JOIN assessment_type AS at
+        ON a.assessment_type_id = at.id
+    WHERE a.due_date <= '{target_date}'::date
+        AND a.due_date >= ('{target_date}'::date - 180)
+        AND a.name NOT LIKE '%%Weekly Spelling%%'
+        AND a.name NOT LIKE '%%Gradebook%%'
+        AND a.due_date > '2013-06-01'::date
+        AND at.description NOT IN (
+            'Incoming Scholar Assessment', 'Math Olympiad Contest', 'NHM', 'Weekly Spelling',
+            'Spelling and Vocabulary Quiz', 'Spelling', 'Formal NHM')
+        AND a.name NOT LIKE '%%OPTIONAL%%'
+), academic_achievement_snapshot AS (
+    SELECT
+        ds.subject_id,
+        saap.scholar_id,
+        '{target_date}'::date AS reference_date,
+        /*SUM (ds.weight * saap.percent_correct) / SUM (ds.weight) AS score*/
+        (SUM(ds.weight * saap.percent_correct) + 0.025) / (SUM(ds.weight) + 0.05) AS score
+    FROM scholar_assessment_answer_percent AS saap
+    INNER JOIN decayed_scores AS ds
+        ON ds.assessment_id = saap.assessment_id
+        AND ds.assessment_question_id = saap.assessment_question_id
+    WHERE NOT EXISTS (
+        SELECT 1 FROM withdrawal AS w WHERE w.scholar_id = saap.scholar_id AND w.final_date <= '{target_date}'::date
+    )
+    GROUP BY ds.subject_id, saap.scholar_id
+)
+SELECT
+    saas.scholar_id,
+    /*saas.reference_date,*/
+    s.name AS subject,
+    ga.grade,
+    saas.score AS achievement
+FROM academic_achievement_snapshot AS saas
+INNER JOIN grade_assignment AS ga
+    ON ga.scholar_id = saas.scholar_id
+INNER JOIN (SELECT id, name FROM subject WHERE name IN ('Literacy', 'Mathematics', 'Science', 'History')) AS s
+    ON s.id = saas.subject_id
+WHERE saas.reference_date = '{target_date}'::date
+    AND '{target_date}'::date >= ga.start_date
+    AND '{target_date}'::date <= COALESCE(ga.end_date, '{target_date}'::date)
+    AND ga.grade IN (0, 1, 2, 3, 4, 5, 6, 7, 8)
+'''
